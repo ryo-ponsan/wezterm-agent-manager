@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { execFile } from 'node:child_process';
+import path from 'node:path';
 import { InstanceList } from '../ui/InstanceList.js';
 import { TabbedWindow } from '../ui/TabbedWindow.js';
 import { Menu } from '../ui/Menu.js';
@@ -16,18 +17,42 @@ import { Config } from '../config/config.js';
 import type { MenuState } from '../keys/keys.js';
 
 /**
- * Send a Windows toast notification + play a notification sound
- * when an agent finishes its task.
+ * Send a desktop notification with status, title, and repo name.
+ * Clicking the notification brings the wam WezTerm window to the foreground.
  */
-function sendNotification(agentTitle: string): void {
+function sendNotification(status: string, agentTitle: string, repoName: string): void {
+  const statusLabel = status === 'action_needed' ? '⚠ ACTION NEEDED' : '✔ Done';
+  const body = `${agentTitle}\n${repoName}`;
+
   if (process.platform === 'win32') {
-    // Toast notification via PowerShell
+    // Get wam's own WezTerm PID for click-to-focus
+    const wamPaneVar = process.env.WEZTERM_PANE;
+    // Find the wezterm-gui PID that owns wam's pane
+    const focusScript = wamPaneVar
+      ? `
+      $procs = Get-Process wezterm-gui -ErrorAction SilentlyContinue;
+      if ($procs) {
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WamFocus { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }';
+        foreach ($p in $procs) {
+          if ($p.MainWindowHandle -ne 0) {
+            if ([WamFocus]::IsIconic($p.MainWindowHandle)) { [WamFocus]::ShowWindow($p.MainWindowHandle, 9) };
+            [WamFocus]::SetForegroundWindow($p.MainWindowHandle);
+            break;
+          }
+        }
+      }`
+      : '';
+
     const script = `
       [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
       $notify = New-Object System.Windows.Forms.NotifyIcon;
       $notify.Icon = [System.Drawing.SystemIcons]::Information;
       $notify.Visible = $true;
-      $notify.ShowBalloonTip(5000, 'wam - Agent Complete', '${agentTitle.replace(/'/g, "''")}', [System.Windows.Forms.ToolTipIcon]::Info);
+      $notify.BalloonTipTitle = 'wam - ${statusLabel.replace(/'/g, "''")}';
+      $notify.BalloonTipText = '${body.replace(/'/g, "''")}';
+      $notify.BalloonTipIcon = '${status === "action_needed" ? "Warning" : "Info"}';
+      ${focusScript ? `Register-ObjectEvent $notify BalloonTipClicked -Action { ${focusScript} } | Out-Null;` : ''}
+      $notify.ShowBalloonTip(5000);
       [System.Media.SystemSounds]::Asterisk.Play();
       Start-Sleep -Seconds 6;
       $notify.Dispose();
@@ -140,12 +165,12 @@ export function App({ defaultDir }: AppProps) {
           if (activity === 'action_needed' && prevStatus !== 'action_needed') {
             inst.setStatus('action_needed');
             stateChanged = true;
-            sendNotification(`⚠ ACTION: ${inst.data.title}`);
+            sendNotification('action_needed', inst.data.title, path.basename(inst.data.repoPath));
           } else if (activity === 'idle' && prevStatus !== 'ready') {
             inst.setStatus('ready');
             stateChanged = true;
             if (prevStatus === 'running') {
-              sendNotification(inst.data.title);
+              sendNotification('ready', inst.data.title, path.basename(inst.data.repoPath));
               // Pre-fetch diff on completion so it's ready when user switches tab
               try {
                 if (inst.data.worktreePath) {
