@@ -86,9 +86,12 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
               </Text>
             </Box>
 
-            {/* Row 2: Status label + Repo */}
+            {/* Row 2: Status label + Time + Repo */}
             <Box>
               <Text color={color} bold>[{label}]</Text>
+              {inst.data.doneAt && (
+                <Text color="gray"> {new Date(inst.data.doneAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</Text>
+              )}
               <Text color="gray"> </Text>
               <Text color="magenta" dimColor>{path.basename(inst.data.repoPath)}</Text>
               {diff && (

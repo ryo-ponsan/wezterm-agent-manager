@@ -14,6 +14,7 @@ export interface InstanceData {
   weztermSocket: string | null; // Socket path for cross-process WezTerm access
   autoYes: boolean;
   diffStats: { added: number; removed: number; files: number } | null;
+  doneAt: string | null;  // ISO timestamp when agent last became done/idle
   createdAt: string;
   updatedAt: string;
 }
@@ -59,6 +60,7 @@ export class Instance {
       weztermSocket: null,
       autoYes: false,
       diffStats: null,
+      doneAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -76,6 +78,9 @@ export class Instance {
   setStatus(status: InstanceStatus): void {
     this.data.status = status;
     this.data.updatedAt = new Date().toISOString();
+    if (status === 'ready') {
+      this.data.doneAt = new Date().toISOString();
+    }
   }
 
   setPaneId(paneId: number): void {
