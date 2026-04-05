@@ -145,6 +145,19 @@ export function App({ defaultDir }: AppProps) {
             stateChanged = true;
             if (prevStatus === 'running') {
               sendNotification(inst.data.title);
+              // Pre-fetch diff on completion so it's ready when user switches tab
+              try {
+                if (inst.data.worktreePath) {
+                  const wt = await GitWorktree.fromExisting(inst.data.worktreePath);
+                  const diff = await wt.getDiff();
+                  inst.setDiffStats({ added: diff.added, removed: diff.removed, files: diff.files });
+                  if (inst === instances[selectedIndex]) setDiffText(diff.content);
+                } else if (inst.data.repoPath) {
+                  const diff = await getRepoDiff(inst.data.repoPath);
+                  inst.setDiffStats({ added: diff.added, removed: diff.removed, files: diff.files });
+                  if (inst === instances[selectedIndex]) setDiffText(diff.content);
+                }
+              } catch { /* ignore */ }
             }
           } else if (activity === 'working' && prevStatus !== 'running') {
             inst.setStatus('running');
