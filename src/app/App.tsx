@@ -43,7 +43,7 @@ export interface AppProps {
   defaultDir: string;
 }
 
-type OverlayType = 'none' | 'new_instance' | 'new_with_prompt' | 'help' | 'confirm_kill' | 'send_prompt';
+type OverlayType = 'none' | 'new_instance' | 'new_with_prompt' | 'help' | 'confirm_kill' | 'send_prompt' | 'action_respond';
 
 export function App({ defaultDir }: AppProps) {
   const { exit } = useApp();
@@ -382,6 +382,46 @@ export function App({ defaultDir }: AppProps) {
 
   // Key input handling
   useInput((input, key) => {
+    // Action respond mode: forward keys to the agent's pane
+    if (overlay === 'action_respond') {
+      const sel = instances[selectedIndex];
+      if (!sel || sel.data.paneId === null || sel.data.paneId < 0) {
+        setOverlay('none');
+        return;
+      }
+      const sock = sel.data.weztermSocket ?? undefined;
+
+      if (key.escape) {
+        setOverlay('none');
+        return;
+      }
+      if (key.upArrow) {
+        wezterm.sendText(sel.data.paneId, '\x1b[A', sock); // Arrow Up
+        return;
+      }
+      if (key.downArrow) {
+        wezterm.sendText(sel.data.paneId, '\x1b[B', sock); // Arrow Down
+        return;
+      }
+      if (key.return) {
+        wezterm.tapEnter(sel.data.paneId, sock);
+        setOverlay('none');
+        sel.setStatus('running');
+        setInstances(prev => [...prev]);
+        return;
+      }
+      // Number keys: send directly (for "1. Yes" style choices)
+      if (/^[0-9]$/.test(input)) {
+        wezterm.sendText(sel.data.paneId, input, sock);
+        wezterm.tapEnter(sel.data.paneId, sock);
+        setOverlay('none');
+        sel.setStatus('running');
+        setInstances(prev => [...prev]);
+        return;
+      }
+      return;
+    }
+
     if (overlay !== 'none') {
       if (key.escape) setOverlay('none');
       return;
@@ -446,7 +486,11 @@ export function App({ defaultDir }: AppProps) {
     if (input === '>') {
       const sel = instances[selectedIndex];
       if (sel && sel.data.paneId !== null && sel.data.paneId >= 0) {
-        setOverlay('send_prompt');
+        if (sel.data.status === 'action_needed') {
+          setOverlay('action_respond');
+        } else {
+          setOverlay('send_prompt');
+        }
       }
     }
     if (input === 'p') handlePush();
@@ -514,6 +558,28 @@ export function App({ defaultDir }: AppProps) {
           onSubmit={handleSendPrompt}
           onCancel={() => setOverlay('none')}
         />
+      )}
+      {overlay === 'action_respond' && selected && (
+        <Box
+          flexDirection="column"
+          borderStyle="double"
+          borderColor="red"
+          paddingX={2}
+          paddingY={1}
+          position="absolute"
+          marginLeft={10}
+          marginTop={5}
+        >
+          <Text bold color="red">⚠ Action Response</Text>
+          <Text color="gray">{'─'.repeat(30)}</Text>
+          <Box marginTop={1}><Text bold>{selected.data.title}</Text></Box>
+          <Box marginTop={1} flexDirection="column">
+            <Text>  <Text color="yellow">↑↓</Text>  move selection</Text>
+            <Text>  <Text color="yellow">Enter</Text>  confirm</Text>
+            <Text>  <Text color="yellow">1-9</Text>  select by number</Text>
+            <Text>  <Text color="yellow">Esc</Text>  cancel</Text>
+          </Box>
+        </Box>
       )}
     </Box>
   );
