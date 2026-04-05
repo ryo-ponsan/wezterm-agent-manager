@@ -370,7 +370,9 @@ export function App({ defaultDir }: AppProps) {
     const selected = instances[selectedIndex];
     if (!selected || selected.data.paneId === null || selected.data.paneId < 0) return;
     const sock = selected.data.weztermSocket ?? undefined;
-    await wezterm.sendText(selected.data.paneId, prompt + '\n', sock);
+    // Send the prompt text, then send Enter separately
+    await wezterm.sendText(selected.data.paneId, prompt, sock);
+    await wezterm.tapEnter(selected.data.paneId, sock);
     // Agent will start working after receiving the prompt
     selected.setStatus('running');
     setInstances(prev => [...prev]);

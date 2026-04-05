@@ -336,8 +336,8 @@ export class WezTermClient {
   /**
    * Send an Enter keypress to a pane.
    */
-  async tapEnter(paneId: number): Promise<void> {
-    await this.sendText(paneId, "\r");
+  async tapEnter(paneId: number, socket?: string): Promise<void> {
+    await this.sendText(paneId, "\r", socket);
   }
 
   /**
