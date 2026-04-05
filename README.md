@@ -2,7 +2,7 @@
 
 複数リポジトリにまたがるAIエージェント（Claude Code, Aider, Codex, Gemini）を1つのTUI画面で一元管理するツール。
 
-[claude-squad](https://github.com/smtg-ai/claude-squad)（tmux版）のWezTerm対応版。Windowsネイティブで動作する。
+Inspired by [claude-squad](https://github.com/smtg-ai/claude-squad). While claude-squad uses tmux, wam is built natively on WezTerm CLI — with cross-window agent discovery, multi-repo management, and Windows desktop notifications.
 
 ## インストール
 
@@ -20,21 +20,31 @@ wam                # カレントディレクトリをデフォルトリポジ�
 wam -d /path/to    # デフォルトリポジトリを指定して起動
 ```
 
-起動するとTUI画面が表示される。左にインスタンス一覧、右にプレビュー/Diff/ターミナル。
+起動すると全WezTermウィンドウから実行中のAgentを自動検出し、TUI画面に一覧表示する。
+
+## 主な特徴
+
+- **クロスウィンドウ検出** — 複数のWezTermウィンドウ/プロセスにまたがるAgentを自動発見
+- **リアルタイムステータス** — 各Agentが作業中/完了/要対応かをアイコンで表示
+- **デスクトップ通知** — Agent完了時やアクション要求時にWindows通知+通知音
+- **マルチリポジトリ** — 異なるリポジトリのAgentを1画面で管理
+- **ワンキー移動** — Enterで選択中Agentのウィンドウ/タブに即フォーカス
+- **tmux不要** — WezTerm CLIネイティブ、Windowsで追加依存なし
 
 ## 画面構成
 
 ```
 ┌── Instances (3) ──────┬── Preview  Diff  Terminal ─────────────┐
 │                       │                                         │
-│ ▸ ● fix-login-bug    │  (選択中Agentの端末出力がリアルタイム表示) │
-│   my-webapp | Ꮧ ...  │                                         │
+│ ▸ ⟳ fix-login-bug    │  (選択中Agentの端末出力がリアルタイム表示) │
+│     [working]         │                                         │
+│   my-webapp           │                                         │
 │                       │                                         │
-│   ◉ add-api          │                                         │
-│   backend | Ꮧ ...    │                                         │
+│   ✔ add-api  [done]  │                                         │
+│   backend-api         │                                         │
 │                       │                                         │
-│   ⏸ update-docs      │                                         │
-│   my-webapp | Ꮧ ...  │                                         │
+│   ⚠ deploy   [ACTION]│                                         │
+│   infra               │                                         │
 │                       │                                         │
 ├───────────────────────┴─────────────────────────────────────────┤
 │ ↑↓ Move  Tab Switch  n New  D Kill  c Pause  r Resume  q Quit  │
@@ -45,10 +55,31 @@ wam -d /path/to    # デフォルトリポジトリを指定して起動
 
 | アイコン | 状態 | 意味 |
 |----------|------|------|
-| `●` (緑) | running | Agentが実行中 |
-| `◉` (黄) | ready | Agentが入力待ち（プロンプト表示中） |
-| `◌` (青) | loading | 起動中 |
-| `⏸` (灰) | paused | 一時停止中（ブランチは保持） |
+| `⟳` (緑) [working] | 作業中 | Agentがコード生成/ツール実行中 |
+| `✔` (黄) [done] | 完了 | Agentが入力待ち（次のプロンプトを待っている） |
+| `⚠` (赤) [ACTION] | 要対応 | ユーザーの選択/許可が必要（y/n, 番号選択など） |
+| `◌` (青) [starting] | 起動中 | 初期化中 |
+| `⏸` (灰) [paused] | 停止中 | 一時停止（`c`で停止, `r`で再開） |
+
+### ステータス判定ロジック
+
+ペーンのテキスト末尾を1.5秒ごとにチェックし、以下の優先順位で判定する:
+
+1. **working**: `esc to interrupt` / `Running...` / スピナーアニメーション（ブライユ文字 `⠋⠙⠹` 等）
+2. **action_needed**: 番号付き選択肢 (`❯ 1. Yes`) / 確認プロンプト (`Do you want to proceed?`, `y/n`)
+3. **idle (done)**: `❯` プロンプト / `⏵⏵ accept edits` バー / シェルプロンプト
+4. 完了報告 (`✻ Worked for 1m 44s`, `✻ Churned for 53s`) は idle 扱い
+
+全パターンは `src/wezterm/patterns.ts` に一元管理されている。Agent側の仕様変更時はこのファイルのみ修正する。
+
+### 通知
+
+| イベント | 通知内容 |
+|---------|---------|
+| working → done | トースト通知 + 通知音（Agent名表示） |
+| → action_needed | トースト通知 + 通知音（`ACTION: Agent名`） |
+
+Windows: `System.Windows.Forms.NotifyIcon` によるバルーン通知 + `SystemSounds.Asterisk`
 
 ## キーバインド
 
@@ -67,16 +98,16 @@ wam -d /path/to    # デフォルトリポジトリを指定して起動
 |------|------|
 | `n` | 新規インスタンス作成 |
 | `N` | プロンプト付きで新規作成 |
-| `Enter` / `o` | 選択中AgentのWezTermタブにフォーカス移動 |
+| `Enter` / `o` | 選択中Agentのウィンドウ/タブにフォーカス移動 |
 | `D` | インスタンスを削除（確認あり） |
 
-### Git操作
+### Git操作（useWorktree有効時）
 
-| キー | 操作 | 詳細 |
-|------|------|------|
-| `c` | **Checkout（一時停止）** | 下記参照 |
-| `r` | **Resume（再開）** | 下記参照 |
-| `p` | **Push** | 下記参照 |
+| キー | 操作 |
+|------|------|
+| `c` | Checkout — 変更をcommitしてAgent停止。ブランチは保持 |
+| `r` | Resume — 停止したAgentをブランチから再開 |
+| `p` | Push — ブランチをリモートにpush |
 
 ### その他
 
@@ -85,117 +116,43 @@ wam -d /path/to    # デフォルトリポジトリを指定して起動
 | `?` | ヘルプ画面の表示 |
 | `q` | wamを終了（Agentはバックグラウンドで生き続ける） |
 
-## Git操作の詳細
+## 自動検出の仕組み
 
-### `c` - Checkout（一時停止）
+wam起動時に、以下の手順で全WezTermウィンドウからAgentを自動検出する:
 
-Agentの作業を安全に中断して、リソースを解放する。
+1. PowerShellで全 `wezterm-gui` プロセスのPIDを取得
+2. 各PIDのUnixドメインソケット (`~/.local/share/wezterm/gui-sock-{PID}`) に接続
+3. `wezterm cli list --format json` で全ペーンを列挙
+4. 各ペーンのタイトルとテキスト内容をチェック:
+   - タイトルに `claude`, `aider` 等が含まれる → 検出
+   - テキスト末尾にAgent固有のUI要素がある → 検出（Claude Code: `╭─`, `❯`, `⏵⏵ accept` 等）
 
-**実行される処理:**
-
-1. Agentのworktree内の全変更を自動コミット（`git add -A` + `git commit`）
-2. git worktreeをディスクから削除（ブランチは残る）
-3. Agentが動いているWezTermペインを閉じる
-4. ステータスが `⏸ paused` になる
-
-**使いどころ:**
-
-- Agentの作業を一旦止めて、後で続きをやりたい時
-- PCのメモリ/CPU使用を抑えたい時（ペインとworktreeが解放される）
-- 長時間放置するインスタンスの整理
-
-**重要:** ブランチと変更は保持される。`r` でいつでも再開可能。
-
-### `r` - Resume（再開）
-
-一時停止したインスタンスを復活させる。
-
-**実行される処理:**
-
-1. 保存されたブランチからgit worktreeを再作成
-2. 新しいWezTermペインでAgentを起動（同じコマンド）
-3. ステータスが `● running` に戻る
-
-**注意:** Agentは新しいプロセスとして起動するため、以前の会話コンテキストは失われる。ただしコードの変更はブランチに保持されているので、Agentは差分を見て作業を理解できる。
-
-### `p` - Push
-
-Agentが作業したブランチをリモートリポジトリにpushする。
-
-**実行される処理:**
-
-1. `git push --set-upstream origin wam/<instance-name>` を実行
-
-**使いどころ:**
-
-- Agentの作業結果からPull Requestを作成したい時
-- 別のマシンやチームメンバーと変更を共有したい時
-- バックアップとしてリモートに保存したい時
-
-### `D` - Kill（削除）
-
-インスタンスを完全に削除する。
-
-**実行される処理:**
-
-1. WezTermペインを終了
-2. git worktreeを削除
-3. ブランチを削除（wamが作成したブランチのみ。既存ブランチは残す）
-4. 管理データから削除
-
-**注意:** この操作は元に戻せない。pushしていない変更は失われる。
-
-## インスタンスのライフサイクル
-
-```
-n(新規作成)
-    ↓
-● running ←──────────────────┐
-    │                         │
-    ├── Enter → Agentのタブに移動（wamのタブに戻れば管理画面）
-    │                         │
-    ├── p → ブランチをpush     │
-    │                         │
-    ├── c(一時停止)            │
-    │       ↓                 │
-    │   ⏸ paused              │
-    │       │                 │
-    │       ├── r(再開) ──────┘
-    │       │
-    │       └── D(削除) → 完全削除
-    │
-    └── D(削除) → 完全削除
-```
+検出パターンは `src/wezterm/patterns.ts` の `AGENT_SIGNATURES` に定義されている。
 
 ## 新規インスタンス作成の流れ
 
-`n` を押すと4ステップのウィザードが表示される:
+`n` を押すと3ステップのウィザードが表示される:
 
 1. **リポジトリパス**: 対象リポジトリのパスを入力（デフォルト: カレントディレクトリ）
 2. **インスタンス名**: 名前を入力（例: `fix-auth-bug`）
 3. **Agent選択**: claude / aider / codex / gemini から選択
-4. **（Nの場合のみ）初期プロンプト**: Agentに送る最初の指示を入力
 
-作成されると:
-- WezTermの新しいタブで、指定リポジトリのディレクトリにてAgentが起動する
-- `useWorktree: true` の場合のみ、`wam/<instance-name>` ブランチが作成されgit worktreeで隔離される
+`N` の場合は追加で初期プロンプトを入力できる。
 
 ## 複数リポジトリの一元管理
 
-wamの最大の特徴は、異なるリポジトリのAgentを1画面で管理できること。
+異なるリポジトリのAgentを1画面で管理できる:
 
 ```
-▸ ● fix-login-bug
-    my-webapp | Ꮧ wam/fix-login-bug  +15 -3      ← リポジトリA
-  ◉ add-api-endpoint
-    backend-api | Ꮧ wam/add-api-endpoint  +42 -0  ← リポジトリB
-  ● update-docs
-    my-webapp | Ꮧ wam/update-docs  +8 -2          ← リポジトリA（別タスク）
-  ⏸ refactor-db
-    data-service | Ꮧ wam/refactor-db               ← リポジトリC（一時停止）
+▸ ⟳ fix-login-bug      [working]
+    my-webapp
+  ✔ add-api-endpoint    [done]
+    backend-api
+  ⟳ update-docs         [working]
+    my-webapp
+  ⚠ deploy-staging      [ACTION]
+    infra-repo
 ```
-
-各インスタンスはリポジトリ名とブランチ名で識別できる。
 
 ## 設定
 
@@ -238,16 +195,36 @@ wamの最大の特徴は、異なるリポジトリのAgentを1画面で管理�
 
 通常は `false`（デフォルト）で十分。各Agentは指定リポジトリのディレクトリで直接起動する。
 
+## パターン定義のカスタマイズ
+
+`src/wezterm/patterns.ts` にAgent検出・ステータス判定の全パターンが集約されている:
+
+```
+patterns.ts
+├── AGENT_SIGNATURES         — どのペーンがAgentか識別
+├── WORKING_PATTERNS         — 確実にworking判定する文字列
+├── COMPLETION_SUMMARY       — 完了報告（"Worked for", "Churned for"）
+├── SPINNER_CHARS            — アニメスピナー文字セット（U+2800-28FF等）
+├── ACTION_NEEDED_PATTERNS   — ユーザー操作が必要な選択肢/確認
+├── IDLE_PATTERNS            — 入力待ち判定
+├── isSpinnerLine()          — スピナー行の判定
+├── isShellPrompt()          — 汎用シェルプロンプト検出
+└── isUIChromeLine()         — wam自身のUI行を除外
+```
+
+Agent側のUI仕様が変更された場合は、このファイルのみ修正すればよい。
+
 ## データ保存先
 
 | ファイル | 用途 |
 |---------|------|
 | `~/.wezterm-agent-manager/config.json` | 設定 |
-| `~/.wezterm-agent-manager/instances.json` | インスタンス状態の永続化 |
-| `~/.wezterm-agent-manager/worktrees/` | git worktreeの保存先 |
+| `~/.wezterm-agent-manager/instances.json` | インスタンス状態（起動時に再スキャンされる） |
+| `~/.wezterm-agent-manager/worktrees/` | git worktreeの保存先（useWorktree有効時のみ） |
 
 ## 動作要件
 
 - Node.js 18+
 - WezTerm（`wezterm cli` がPATHで使えること）
 - Git
+- Windows 10/11（クロスウィンドウ検出・通知はWindows専用。macOS/Linuxではシングルウィンドウ+ベル音で動作）
