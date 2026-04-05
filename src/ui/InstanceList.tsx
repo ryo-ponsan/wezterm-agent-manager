@@ -36,8 +36,9 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
     );
   }
 
-  // Scrolling window
-  const visibleCount = Math.max(1, height);
+  // Each card takes 4 lines (border top + title + info + border bottom)
+  const cardHeight = 4;
+  const visibleCount = Math.max(1, Math.floor(height / cardHeight));
   let startIdx = 0;
   if (selectedIndex >= startIdx + visibleCount) {
     startIdx = selectedIndex - visibleCount + 1;
@@ -50,29 +51,34 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Text bold color="cyan"> Instances ({instances.length})</Text>
-      <Text color="gray">{'─'.repeat(28)}</Text>
       {visible.map((inst, i) => {
         const realIndex = startIdx + i;
         const isSelected = realIndex === selectedIndex;
         const { symbol, color, label } = statusIndicator(inst.data.status);
         const diff = inst.data.diffStats;
+        const borderColor = isSelected ? color : 'gray';
 
         return (
-          <Box key={inst.data.id} flexDirection="column">
+          <Box
+            key={inst.data.id}
+            flexDirection="column"
+            borderStyle={isSelected ? 'bold' : 'single'}
+            borderColor={borderColor}
+            paddingX={1}
+          >
+            {/* Row 1: Status + Title (prominent) */}
             <Box>
-              <Text color={isSelected ? 'cyan' : 'white'}>
-                {isSelected ? '▸ ' : '  '}
-              </Text>
-              <Text color={color}>{symbol} </Text>
-              <Text bold={isSelected} color={isSelected ? 'white' : 'gray'}>
+              <Text color={color} bold>{symbol} </Text>
+              <Text bold wrap="truncate">
                 {inst.data.title}
               </Text>
-              <Text color={color} dimColor> [{label}]</Text>
             </Box>
-            <Box marginLeft={4}>
+
+            {/* Row 2: Status label + Repo */}
+            <Box>
+              <Text color={color} bold>[{label}]</Text>
+              <Text color="gray"> </Text>
               <Text color="magenta" dimColor>{path.basename(inst.data.repoPath)}</Text>
-              <Text color="gray" dimColor> | </Text>
-              <Text color="blue" dimColor>Ꮧ {inst.data.branch || 'no branch'}</Text>
               {diff && (
                 <Text>
                   {' '}
@@ -81,11 +87,6 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
                 </Text>
               )}
             </Box>
-            {inst.data.autoYes && (
-              <Box marginLeft={4}>
-                <Text color="magenta" dimColor>[auto-yes]</Text>
-              </Box>
-            )}
           </Box>
         );
       })}
