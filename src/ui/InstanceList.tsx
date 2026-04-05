@@ -9,18 +9,20 @@ interface Props {
   height: number;
 }
 
-function statusIndicator(status: string): { symbol: string; color: string } {
+function statusIndicator(status: string): { symbol: string; color: string; label: string } {
   switch (status) {
     case 'running':
-      return { symbol: '●', color: 'green' };
+      return { symbol: '⟳', color: 'green', label: 'working' };
     case 'ready':
-      return { symbol: '◉', color: 'yellow' };
+      return { symbol: '✔', color: 'yellow', label: 'done' };
+    case 'action_needed':
+      return { symbol: '⚠', color: 'red', label: 'ACTION' };
     case 'loading':
-      return { symbol: '◌', color: 'blue' };
+      return { symbol: '◌', color: 'blue', label: 'starting' };
     case 'paused':
-      return { symbol: '⏸', color: 'gray' };
+      return { symbol: '⏸', color: 'gray', label: 'paused' };
     default:
-      return { symbol: '?', color: 'white' };
+      return { symbol: '?', color: 'white', label: '' };
   }
 }
 
@@ -52,7 +54,7 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
       {visible.map((inst, i) => {
         const realIndex = startIdx + i;
         const isSelected = realIndex === selectedIndex;
-        const { symbol, color } = statusIndicator(inst.data.status);
+        const { symbol, color, label } = statusIndicator(inst.data.status);
         const diff = inst.data.diffStats;
 
         return (
@@ -65,6 +67,7 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
               <Text bold={isSelected} color={isSelected ? 'white' : 'gray'}>
                 {inst.data.title}
               </Text>
+              <Text color={color} dimColor> [{label}]</Text>
             </Box>
             <Box marginLeft={4}>
               <Text color="magenta" dimColor>{path.basename(inst.data.repoPath)}</Text>

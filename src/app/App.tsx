@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { execFile } from 'node:child_process';
 import { InstanceList } from '../ui/InstanceList.js';
 import { TabbedWindow } from '../ui/TabbedWindow.js';
 import { Menu } from '../ui/Menu.js';
@@ -12,6 +13,30 @@ import { WezTermClient } from '../wezterm/client.js';
 import { GitWorktree } from '../session/git.js';
 import { Config } from '../config/config.js';
 import type { MenuState } from '../keys/keys.js';
+
+/**
+ * Send a Windows toast notification + play a notification sound
+ * when an agent finishes its task.
+ */
+function sendNotification(agentTitle: string): void {
+  if (process.platform === 'win32') {
+    // Toast notification via PowerShell
+    const script = `
+      [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
+      $notify = New-Object System.Windows.Forms.NotifyIcon;
+      $notify.Icon = [System.Drawing.SystemIcons]::Information;
+      $notify.Visible = $true;
+      $notify.ShowBalloonTip(5000, 'wam - Agent Complete', '${agentTitle.replace(/'/g, "''")}', [System.Windows.Forms.ToolTipIcon]::Info);
+      [System.Media.SystemSounds]::Asterisk.Play();
+      Start-Sleep -Seconds 6;
+      $notify.Dispose();
+    `;
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], () => {});
+  } else {
+    // macOS / Linux: terminal bell
+    process.stdout.write('\x07');
+  }
+}
 
 export interface AppProps {
   defaultDir: string;
@@ -37,8 +62,13 @@ export function App({ defaultDir }: AppProps) {
   const wezterm = React.useRef(new WezTermClient()).current;
   const config = React.useRef(new Config()).current;
 
-  // Phase 1: Load saved instances immediately (fast)
+  // On startup: discover all running agents fresh each time.
+  // We do NOT restore from instances.json because pane IDs change
+  // between WezTerm restarts, leading to stale/duplicate entries.
+  // Instead, we scan all WezTerm windows every launch.
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       await config.load();
 
@@ -49,93 +79,94 @@ export function App({ defaultDir }: AppProps) {
           wezterm.selfPaneId = parseInt(paneVar, 10);
         }
       } catch { /* ignore */ }
-      const savedData = await storage.load();
-      const loaded: Instance[] = [];
 
-      for (const data of savedData) {
-        loaded.push(Instance.fromJSON(data));
-      }
-
-      setInstances(loaded);
-    })();
-  }, []);
-
-  // Phase 2: Auto-discover agents in background (slow — hits all WezTerm processes)
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      // Small delay to let the TUI render first
-      await new Promise(r => setTimeout(r, 500));
-      if (cancelled) return;
-
+      // Discover all agent panes across all WezTerm windows
       try {
         const discovered = await wezterm.discoverAllWindows();
         if (cancelled) return;
 
-        setInstances(prev => {
-          const trackedPaneIds = new Set(
-            prev.filter(i => i.data.paneId !== null && i.data.paneId >= 0)
-              .map(i => `${i.data.weztermSocket ?? 'default'}:${i.data.paneId}`)
+        const freshInstances: Instance[] = [];
+        for (const pane of discovered) {
+          const socket = pane.pid ? wezterm.socketPathForPid(pane.pid) : null;
+          const cwd = decodeURIComponent(pane.cwd);
+          const inst = Instance.create(
+            pane.title,
+            pane.program as any,
+            cwd,
+            pane.program,
           );
+          inst.setPaneId(pane.paneId);
+          inst.data.weztermSocket = socket;
 
-          const newInstances: Instance[] = [];
-          for (const pane of discovered) {
-            const socket = pane.pid ? wezterm.socketPathForPid(pane.pid) : null;
-            const key = pane.pid ? `${socket}:${pane.paneId}` : `default:${pane.paneId}`;
-            if (trackedPaneIds.has(key)) continue;
-
-            const cwd = decodeURIComponent(pane.cwd);
-            const inst = Instance.create(
-              pane.title,
-              pane.program as any,
-              cwd,
-              pane.program,
-            );
-            inst.setPaneId(pane.paneId);
-            inst.data.weztermSocket = socket;
+          // Detect initial activity state
+          try {
+            const activity = await wezterm.detectActivity(pane.paneId, socket ?? undefined);
+            inst.setStatus(activity === 'idle' ? 'ready' : 'running');
+          } catch {
             inst.setStatus('running');
-            newInstances.push(inst);
           }
+          freshInstances.push(inst);
+        }
 
-          if (newInstances.length === 0) return prev;
-          const merged = [...prev, ...newInstances];
-          storage.save(merged.map(i => i.toJSON()));
-          return merged;
-        });
+        if (!cancelled) {
+          setInstances(freshInstances);
+          await storage.save(freshInstances.map(i => i.toJSON()));
+        }
       } catch {
-        // Discovery failed — not critical, just skip
+        // Discovery failed — start with empty list
+        setInstances([]);
       }
     })();
 
     return () => { cancelled = true; };
   }, []);
 
-  // Periodic refresh: update preview, diff stats
+  // Periodic refresh: update ALL instance statuses + selected preview
   useEffect(() => {
     const interval = setInterval(async () => {
-      const selected = instances[selectedIndex];
-      if (!selected) return;
+      let stateChanged = false;
 
-      if (selected.data.paneId !== null && selected.data.paneId >= 0) {
-        const sock = selected.data.weztermSocket ?? undefined;
+      // Update status for ALL instances (not just selected)
+      for (const inst of instances) {
+        if (inst.data.paneId === null || inst.data.paneId < 0) continue;
+        if (inst.data.status === 'paused' || inst.data.status === 'loading') continue;
+
+        const sock = inst.data.weztermSocket ?? undefined;
         try {
-          const text = await wezterm.getText(selected.data.paneId, sock);
-          setPreviewText(text);
+          const activity = await wezterm.detectActivity(inst.data.paneId, sock);
+          const prevStatus = inst.data.status;
 
-          const hasPrompt = await wezterm.hasPrompt(selected.data.paneId, sock);
-          if (hasPrompt && selected.data.status === 'running') {
-            selected.setStatus('ready');
-          } else if (!hasPrompt && selected.data.status === 'ready') {
-            selected.setStatus('running');
+          if (activity === 'action_needed' && prevStatus !== 'action_needed') {
+            inst.setStatus('action_needed');
+            stateChanged = true;
+            sendNotification(`⚠ ACTION: ${inst.data.title}`);
+          } else if (activity === 'idle' && prevStatus !== 'ready') {
+            inst.setStatus('ready');
+            stateChanged = true;
+            if (prevStatus === 'running') {
+              sendNotification(inst.data.title);
+            }
+          } else if (activity === 'working' && prevStatus !== 'running') {
+            inst.setStatus('running');
+            stateChanged = true;
           }
         } catch {
           // Pane may have died
         }
       }
 
+      // Update preview for selected instance
+      const selected = instances[selectedIndex];
+      if (selected && selected.data.paneId !== null && selected.data.paneId >= 0) {
+        const sock = selected.data.weztermSocket ?? undefined;
+        try {
+          const text = await wezterm.getText(selected.data.paneId, sock);
+          setPreviewText(text);
+        } catch { /* ignore */ }
+      }
+
       // Update diff if on diff tab
-      if (activeTab === 'diff' && selected.data.worktreePath) {
+      if (selected && activeTab === 'diff' && selected.data.worktreePath) {
         try {
           const wt = await GitWorktree.fromExisting(selected.data.worktreePath);
           const diff = await wt.getDiff();
@@ -145,14 +176,13 @@ export function App({ defaultDir }: AppProps) {
             removed: diff.removed,
             files: diff.files,
           });
-        } catch {
-          // Git error
-        }
+        } catch { /* ignore */ }
       }
 
-      // Persist state
+      // Always trigger re-render to keep UI fresh (instances are mutated in-place)
+      setInstances(prev => [...prev]);
       await storage.save(instances.map(i => i.toJSON()));
-    }, 1000);
+    }, 1500);
 
     return () => clearInterval(interval);
   }, [instances, selectedIndex, activeTab]);

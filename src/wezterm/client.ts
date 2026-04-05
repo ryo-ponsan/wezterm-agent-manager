@@ -1,5 +1,18 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import {
+  AGENT_SIGNATURES,
+  WORKING_PATTERNS,
+  ACTION_NEEDED_PATTERNS,
+  IDLE_PATTERNS,
+  COMPLETION_SUMMARY,
+  SPINNER_CHARS,
+  isSpinnerLine,
+  isShellPrompt,
+  isUIChromeLine,
+  ACTIVITY_TAIL_LINES,
+  IDENTIFY_TAIL_LINES,
+} from "./patterns.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,8 +40,8 @@ interface WezTermListEntry {
   tty_name: string;
 }
 
-/** Common prompt-line indicators used by shells and Claude-like agents. */
-const PROMPT_INDICATORS = ["$", ">", "❯", "%", "#", ">>", ">>>", "λ"];
+/** Agent activity status detected from pane content. */
+export type AgentActivity = "working" | "idle" | "action_needed" | "unknown";
 
 /**
  * Resolves the path to the wezterm executable.
@@ -265,29 +278,59 @@ export class WezTermClient {
   }
 
   /**
-   * Heuristic check for whether the pane is sitting at a shell prompt
-   * (i.e. the process inside is waiting for user input).
+   * Detect the activity status of an agent running in a pane.
    *
-   * Looks at the last few non-empty lines of the pane text for common
-   * prompt characters.
+   * All pattern definitions live in ./patterns.ts — edit that file
+   * when agent UIs change upstream.
+   */
+  async detectActivity(paneId: number, socket?: string): Promise<AgentActivity> {
+    const text = await this.getText(paneId, socket);
+    const tail = text
+      .split("\n")
+      .slice(-ACTIVITY_TAIL_LINES)
+      .filter((l) => !isUIChromeLine(l))
+      .map((l) => l.trimEnd());
+
+    // 1. Definitive WORKING — highest priority
+    if (tail.some((l) => WORKING_PATTERNS.some((p) => p.test(l)))) {
+      return "working";
+    }
+
+    // 2. Spinner detection (animated braille / ✻)
+    const hasCompletionSummary = tail.some((l) => COMPLETION_SUMMARY.test(l));
+    const hasSpinner = !hasCompletionSummary && tail.some(isSpinnerLine);
+
+    if (hasSpinner) {
+      const lastSpinnerIdx = tail.findLastIndex(isSpinnerLine);
+      const lastPromptIdx = tail.findLastIndex((l) => /^\s*❯/.test(l));
+      if (lastPromptIdx > lastSpinnerIdx) {
+        return "idle";
+      }
+      return "working";
+    }
+
+    // 3. ACTION NEEDED — blocked on user choice / permission
+    if (tail.some((l) => ACTION_NEEDED_PATTERNS.some((p) => p.test(l)))) {
+      return "action_needed";
+    }
+
+    // 4. IDLE — waiting for next prompt
+    if (tail.some((l) => IDLE_PATTERNS.some((p) => p.test(l)))) {
+      return "idle";
+    }
+    if (tail.some(isShellPrompt)) {
+      return "idle";
+    }
+
+    return "unknown";
+  }
+
+  /**
+   * Backwards-compatible wrapper.
    */
   async hasPrompt(paneId: number, socket?: string): Promise<boolean> {
-    const text = await this.getText(paneId, socket);
-    const lines = text.split("\n").filter((l) => l.trim().length > 0);
-    // Inspect the last 3 non-empty lines
-    const tail = lines.slice(-3);
-
-    return tail.some((line) => {
-      const trimmed = line.trimEnd();
-      return PROMPT_INDICATORS.some(
-        (ind) =>
-          trimmed.endsWith(ind) ||
-          trimmed.endsWith(`${ind} `) ||
-          // Claude-style "Human:" or "> " prompts
-          trimmed.endsWith(">") ||
-          trimmed.endsWith("Human:"),
-      );
-    });
+    const activity = await this.detectActivity(paneId, socket);
+    return activity === "idle";
   }
 
   /**
@@ -296,46 +339,6 @@ export class WezTermClient {
   async tapEnter(paneId: number): Promise<void> {
     await this.sendText(paneId, "\r");
   }
-
-  /**
-   * Content patterns that indicate a specific agent is running in a pane.
-   * Checked against the last ~30 lines of pane text.
-   */
-  /**
-   * Content patterns to detect agents. These must be specific enough
-   * to avoid false positives from shells that happen to mention "claude" etc.
-   * We look for UI chrome / banners that only appear in the actual agent TUI.
-   */
-  private static readonly AGENT_CONTENT_PATTERNS: Array<{
-    program: string;
-    patterns: RegExp[];
-  }> = [
-    {
-      program: "claude",
-      patterns: [
-        /╭─/,                           // Claude Code's box-drawing border
-        /╰─/,                           // Claude Code's box-drawing border
-        /❯\s*$/m,                       // Claude Code's input prompt ❯
-        /\bclaude\s*>\s*$/m,            // Claude's prompt "claude > "
-        /\bClaude Code\b/,             // Banner text
-        /Type a message/,              // Claude Code input prompt
-        /⏵⏵\s*accept/,                 // Claude Code's "accept edits" bar
-        /✻\s*(Thinking|Churned)/,      // Claude Code's thinking indicator
-      ],
-    },
-    {
-      program: "aider",
-      patterns: [/Aider v\d/, /aider>/],
-    },
-    {
-      program: "codex",
-      patterns: [/Codex CLI/, /codex>/],
-    },
-    {
-      program: "gemini",
-      patterns: [/Gemini \d/, /gemini>/],
-    },
-  ];
 
   /**
    * Discover all WezTerm panes that appear to be running an agent process.
@@ -363,7 +366,7 @@ export class WezTermClient {
       const titleLower = entry.title.toLowerCase();
       let matched = false;
 
-      for (const agent of WezTermClient.AGENT_CONTENT_PATTERNS) {
+      for (const agent of AGENT_SIGNATURES) {
         if (titleLower.includes(agent.program)) {
           results.push({
             paneId: entry.pane_id,
@@ -381,10 +384,10 @@ export class WezTermClient {
       try {
         const text = await this.getText(entry.pane_id);
         // Only check last ~30 lines for performance
-        const tail = text.split("\n").slice(-30).join("\n");
+        const tail = text.split("\n").slice(-IDENTIFY_TAIL_LINES).join("\n");
 
-        for (const agent of WezTermClient.AGENT_CONTENT_PATTERNS) {
-          if (agent.patterns.some((p) => p.test(tail))) {
+        for (const agent of AGENT_SIGNATURES) {
+          if (agent.contentPatterns.some((p) => p.test(tail))) {
             results.push({
               paneId: entry.pane_id,
               title: entry.title,
@@ -477,7 +480,7 @@ export class WezTermClient {
           // Check title first
           const titleLower = entry.title.toLowerCase();
           let matched = false;
-          for (const agent of WezTermClient.AGENT_CONTENT_PATTERNS) {
+          for (const agent of AGENT_SIGNATURES) {
             if (titleLower.includes(agent.program)) {
               allResults.push({
                 paneId: entry.pane_id,
@@ -501,9 +504,9 @@ export class WezTermClient {
               String(entry.pane_id),
             ], { env: { ...process.env, WEZTERM_UNIX_SOCKET: socket } });
 
-            const tail = text.split("\n").slice(-30).join("\n");
-            for (const agent of WezTermClient.AGENT_CONTENT_PATTERNS) {
-              if (agent.patterns.some((p) => p.test(tail))) {
+            const tail = text.split("\n").slice(-IDENTIFY_TAIL_LINES).join("\n");
+            for (const agent of AGENT_SIGNATURES) {
+              if (agent.contentPatterns.some((p) => p.test(tail))) {
                 allResults.push({
                   paneId: entry.pane_id,
                   title: entry.title,

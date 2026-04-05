@@ -1,4 +1,4 @@
-export type InstanceStatus = 'running' | 'ready' | 'loading' | 'paused';
+export type InstanceStatus = 'running' | 'ready' | 'action_needed' | 'loading' | 'paused';
 export type ProgramType = 'claude' | 'aider' | 'codex' | 'gemini' | 'custom';
 
 export interface InstanceData {
