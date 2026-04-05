@@ -162,7 +162,7 @@ export class WezTermClient {
    * Send text to a pane. The text is delivered as if typed.
    * Use `\r` or `\n` to send Enter.
    */
-  async sendText(paneId: number, text: string): Promise<void> {
+  async sendText(paneId: number, text: string, socket?: string): Promise<void> {
     await this.run([
       "send-text",
       "--pane-id",
@@ -170,7 +170,7 @@ export class WezTermClient {
       "--no-paste",
       "--",
       text,
-    ]);
+    ], socket);
   }
 
   /**

@@ -7,6 +7,7 @@ import { Menu } from '../ui/Menu.js';
 import { NewInstanceOverlay } from '../ui/overlays/NewInstanceOverlay.js';
 import { HelpOverlay } from '../ui/overlays/HelpOverlay.js';
 import { ConfirmOverlay } from '../ui/overlays/ConfirmOverlay.js';
+import { SendPromptOverlay } from '../ui/overlays/SendPromptOverlay.js';
 import { Instance } from '../session/instance.js';
 import { Storage } from '../session/storage.js';
 import { WezTermClient } from '../wezterm/client.js';
@@ -42,7 +43,7 @@ export interface AppProps {
   defaultDir: string;
 }
 
-type OverlayType = 'none' | 'new_instance' | 'new_with_prompt' | 'help' | 'confirm_kill';
+type OverlayType = 'none' | 'new_instance' | 'new_with_prompt' | 'help' | 'confirm_kill' | 'send_prompt';
 
 export function App({ defaultDir }: AppProps) {
   const { exit } = useApp();
@@ -363,6 +364,18 @@ export function App({ defaultDir }: AppProps) {
     await wezterm.activatePane(selected.data.paneId, sock);
   }, [instances, selectedIndex]);
 
+  // Handle sending a prompt to the selected agent
+  const handleSendPrompt = useCallback(async (prompt: string) => {
+    setOverlay('none');
+    const selected = instances[selectedIndex];
+    if (!selected || selected.data.paneId === null || selected.data.paneId < 0) return;
+    const sock = selected.data.weztermSocket ?? undefined;
+    await wezterm.sendText(selected.data.paneId, prompt + '\n', sock);
+    // Agent will start working after receiving the prompt
+    selected.setStatus('running');
+    setInstances(prev => [...prev]);
+  }, [instances, selectedIndex]);
+
   const contentHeight = rows - 5;
 
   // Key input handling
@@ -428,6 +441,12 @@ export function App({ defaultDir }: AppProps) {
     if (input === 'n') setOverlay('new_instance');
     if (input === 'N') setOverlay('new_with_prompt');
     if (input === 'D') setOverlay('confirm_kill');
+    if (input === '>') {
+      const sel = instances[selectedIndex];
+      if (sel && sel.data.paneId !== null && sel.data.paneId >= 0) {
+        setOverlay('send_prompt');
+      }
+    }
     if (input === 'p') handlePush();
     if (input === 'c') handlePause();
     if (input === 'r') handleResume();
@@ -484,6 +503,13 @@ export function App({ defaultDir }: AppProps) {
         <ConfirmOverlay
           message={`Kill instance "${selected?.data.title}"?`}
           onConfirm={handleKillInstance}
+          onCancel={() => setOverlay('none')}
+        />
+      )}
+      {overlay === 'send_prompt' && selected && (
+        <SendPromptOverlay
+          agentTitle={selected.data.title}
+          onSubmit={handleSendPrompt}
           onCancel={() => setOverlay('none')}
         />
       )}
