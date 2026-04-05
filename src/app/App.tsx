@@ -20,28 +20,70 @@ import type { MenuState } from '../keys/keys.js';
  * Send a desktop notification with status, title, and repo name.
  * Clicking the notification brings the wam WezTerm window to the foreground.
  */
+/** PID of the wezterm-gui process running wam, cached at startup. */
+let wamWeztermPid: number | null = null;
+
+/** Detect which wezterm-gui PID owns the pane wam is running in. */
+function detectWamPid(): void {
+  if (process.platform !== 'win32') return;
+  const paneId = process.env.WEZTERM_PANE;
+  if (!paneId) return;
+
+  // Check each wezterm-gui socket to find which one has our pane
+  execFile('powershell.exe', [
+    '-NoProfile', '-Command',
+    'Get-Process wezterm-gui -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id',
+  ], (err, stdout) => {
+    if (err || !stdout.trim()) return;
+    const pids = stdout.trim().split(/\r?\n/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+
+    // Try each PID's socket to find one that lists our pane
+    const home = (process.env.USERPROFILE ?? '').replace(/\\/g, '/');
+    for (const pid of pids) {
+      const sock = `${home}/.local/share/wezterm/gui-sock-${pid}`;
+      execFile('wezterm', ['cli', 'list', '--format', 'json'], {
+        env: { ...process.env, WEZTERM_UNIX_SOCKET: sock },
+      }, (e, out) => {
+        if (e || !out.trim()) return;
+        try {
+          const entries = JSON.parse(out.trim());
+          if (entries.some((entry: any) => entry.pane_id === parseInt(paneId, 10))) {
+            wamWeztermPid = pid;
+          }
+        } catch { /* ignore */ }
+      });
+    }
+  });
+}
+
 function sendNotification(status: string, agentTitle: string, repoName: string): void {
   const statusLabel = status === 'action_needed' ? '⚠ ACTION NEEDED' : '✔ Done';
   const body = `${agentTitle}\n${repoName}`;
 
   if (process.platform === 'win32') {
-    // Get wam's own WezTerm PID for click-to-focus
-    const wamPaneVar = process.env.WEZTERM_PANE;
-    // Find the wezterm-gui PID that owns wam's pane
-    const focusScript = wamPaneVar
-      ? `
-      $procs = Get-Process wezterm-gui -ErrorAction SilentlyContinue;
-      if ($procs) {
+    // On click: bring wam's WezTerm window to front + activate wam's pane
+    const paneId = process.env.WEZTERM_PANE;
+    const focusParts: string[] = [];
+
+    if (wamWeztermPid) {
+      focusParts.push(`
         Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WamFocus { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }';
-        foreach ($p in $procs) {
-          if ($p.MainWindowHandle -ne 0) {
-            if ([WamFocus]::IsIconic($p.MainWindowHandle)) { [WamFocus]::ShowWindow($p.MainWindowHandle, 9) };
-            [WamFocus]::SetForegroundWindow($p.MainWindowHandle);
-            break;
-          }
-        }
-      }`
-      : '';
+        $p = Get-Process -Id ${wamWeztermPid} -ErrorAction SilentlyContinue;
+        if ($p -and $p.MainWindowHandle -ne 0) {
+          if ([WamFocus]::IsIconic($p.MainWindowHandle)) { [WamFocus]::ShowWindow($p.MainWindowHandle, 9) };
+          [WamFocus]::SetForegroundWindow($p.MainWindowHandle)
+        }`);
+    }
+
+    if (paneId) {
+      // Also activate wam's pane so user lands directly on the wam TUI
+      const home = (process.env.USERPROFILE ?? '').replace(/\\/g, '/');
+      const sock = wamWeztermPid ? `${home}/.local/share/wezterm/gui-sock-${wamWeztermPid}` : '';
+      const envPart = sock ? `$env:WEZTERM_UNIX_SOCKET='${sock}';` : '';
+      focusParts.push(`${envPart} wezterm cli activate-pane --pane-id ${paneId}`);
+    }
+
+    const focusScript = focusParts.join('; ');
 
     const script = `
       [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
@@ -105,6 +147,9 @@ export function App({ defaultDir }: AppProps) {
           wezterm.selfPaneId = parseInt(paneVar, 10);
         }
       } catch { /* ignore */ }
+
+      // Detect which wezterm-gui process owns wam (for notification click-to-focus)
+      detectWamPid();
 
       // Discover all agent panes across all WezTerm windows
       try {
