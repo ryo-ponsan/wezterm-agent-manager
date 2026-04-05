@@ -85,11 +85,18 @@ export function isSpinnerLine(line: string): boolean {
 /**
  * "Action needed" patterns — the agent is blocked and waiting for the
  * user to make a choice or grant permission.
+ *
+ * These must be strict to avoid false positives from conversation text
+ * that merely mentions words like "approve" or "permission".
+ * Only match actual interactive prompt UI elements.
  */
 export const ACTION_NEEDED_PATTERNS: RegExp[] = [
-  /^\s*❯?\s*\d+\.\s+/i,                                     // Numbered choice: "❯ 1. Yes"
-  /\b(Do you want to|proceed\?|Allow|permission|trust|approve|accept\?)\b/i,
-  /\b(y\/n|Y\/N|\[y\/N\]|\[Y\/n\])\b/,                      // y/n prompt
+  /^\s*❯\s*\d+\.\s+/,                       // Numbered choice with cursor: "❯ 1. Yes"
+  /^\s*\d+\.\s+(Yes|No|Allow|Deny|Skip)\s*$/i, // Numbered choice line: "2. No"
+  /\b(y\/n|Y\/N)\s*[):\]>]?\s*$/,           // y/n at END of line (actual prompt, not prose)
+  /\[y\/N\]\s*$/,                            // [y/N] at end of line
+  /\[Y\/n\]\s*$/,                            // [Y/n] at end of line
+  /Do you want to proceed\?\s*$/i,           // Exact prompt question at end of line
 ];
 
 /**
