@@ -293,3 +293,28 @@ export class GitWorktree {
     }
   }
 }
+
+/**
+ * Get diff for a plain repository (no worktree).
+ * Combines unstaged + staged changes.
+ */
+export async function getRepoDiff(repoPath: string): Promise<DiffStats> {
+  const git = simpleGit(repoPath);
+
+  // unstaged + staged combined
+  const unstaged = await git.diff();
+  const staged = await git.diff(['--cached']);
+
+  const fullDiff = [staged, unstaged].filter(Boolean).join('\n');
+
+  // Get summary for counts
+  const summary = await git.diffSummary();
+  const stagedSummary = await git.diffSummary(['--cached']);
+
+  return {
+    added: summary.insertions + stagedSummary.insertions,
+    removed: summary.deletions + stagedSummary.deletions,
+    files: summary.changed + stagedSummary.changed,
+    content: fullDiff || '(no uncommitted changes)',
+  };
+}

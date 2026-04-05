@@ -10,7 +10,7 @@ import { ConfirmOverlay } from '../ui/overlays/ConfirmOverlay.js';
 import { Instance } from '../session/instance.js';
 import { Storage } from '../session/storage.js';
 import { WezTermClient } from '../wezterm/client.js';
-import { GitWorktree } from '../session/git.js';
+import { GitWorktree, getRepoDiff } from '../session/git.js';
 import { Config } from '../config/config.js';
 import type { MenuState } from '../keys/keys.js';
 
@@ -52,7 +52,7 @@ export function App({ defaultDir }: AppProps) {
 
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [activeTab, setActiveTab] = useState<'preview' | 'diff' | 'terminal'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'diff'>('preview');
   const [overlay, setOverlay] = useState<OverlayType>('none');
   const [previewText, setPreviewText] = useState('');
   const [diffText, setDiffText] = useState('');
@@ -165,17 +165,26 @@ export function App({ defaultDir }: AppProps) {
         } catch { /* ignore */ }
       }
 
-      // Update diff if on diff tab
-      if (selected && activeTab === 'diff' && selected.data.worktreePath) {
+      // Update diff only when diff tab is active
+      if (selected && activeTab === 'diff') {
         try {
-          const wt = await GitWorktree.fromExisting(selected.data.worktreePath);
-          const diff = await wt.getDiff();
-          setDiffText(diff.content);
-          selected.setDiffStats({
-            added: diff.added,
-            removed: diff.removed,
-            files: diff.files,
-          });
+          let diff;
+          if (selected.data.worktreePath) {
+            // Worktree mode: diff against base commit
+            const wt = await GitWorktree.fromExisting(selected.data.worktreePath);
+            diff = await wt.getDiff();
+          } else if (selected.data.repoPath) {
+            // Normal mode: unstaged + staged changes
+            diff = await getRepoDiff(selected.data.repoPath);
+          }
+          if (diff) {
+            setDiffText(diff.content);
+            selected.setDiffStats({
+              added: diff.added,
+              removed: diff.removed,
+              files: diff.files,
+            });
+          }
         } catch { /* ignore */ }
       }
 
@@ -361,9 +370,7 @@ export function App({ defaultDir }: AppProps) {
     // Tab switching
     if (key.tab) {
       setActiveTab(prev => {
-        if (prev === 'preview') return 'diff';
-        if (prev === 'diff') return 'terminal';
-        return 'preview';
+        return prev === 'preview' ? 'diff' : 'preview';
       });
       setScrollOffset(0);
     }

@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 import { Instance } from '../session/instance.js';
 
 interface Props {
-  activeTab: 'preview' | 'diff' | 'terminal';
+  activeTab: 'preview' | 'diff';
   previewText: string;
   diffText: string;
   height: number;
@@ -28,7 +28,7 @@ function DiffLine({ line }: { line: string }) {
 }
 
 export function TabbedWindow({ activeTab, previewText, diffText, height, scrollOffset, selected }: Props) {
-  const tabs = ['preview', 'diff', 'terminal'] as const;
+  const tabs = ['preview', 'diff'] as const;
   const contentHeight = Math.max(1, height - 3);
 
   const renderContent = () => {
@@ -62,8 +62,8 @@ export function TabbedWindow({ activeTab, previewText, diffText, height, scrollO
       }
 
       case 'diff': {
-        if (!diffText) {
-          return <Text color="gray">No changes yet</Text>;
+        if (!diffText || diffText === '(no uncommitted changes)') {
+          return <Text color="gray">No uncommitted changes</Text>;
         }
         const lines = diffText.split('\n');
         const start = Math.min(scrollOffset, Math.max(0, lines.length - contentHeight));
@@ -73,15 +73,6 @@ export function TabbedWindow({ activeTab, previewText, diffText, height, scrollO
             {visible.map((line, i) => (
               <DiffLine key={i} line={line} />
             ))}
-          </Box>
-        );
-      }
-
-      case 'terminal': {
-        return (
-          <Box flexDirection="column" alignItems="center" justifyContent="center" height={contentHeight}>
-            <Text color="cyan">Press Enter to attach to this session</Text>
-            <Text color="gray" dimColor>Use Ctrl+Q to detach back to manager</Text>
           </Box>
         );
       }
