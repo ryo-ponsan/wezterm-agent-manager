@@ -9,6 +9,14 @@ interface Props {
   height: number;
 }
 
+const AGENT_BADGES: Record<string, { badge: string; color: string }> = {
+  claude: { badge: 'C', color: 'cyan' },
+  aider:  { badge: 'A', color: 'green' },
+  codex:  { badge: 'X', color: 'magenta' },
+  gemini: { badge: 'G', color: 'yellow' },
+  custom: { badge: '?', color: 'gray' },
+};
+
 function statusIndicator(status: string): { symbol: string; color: string; label: string } {
   switch (status) {
     case 'running':
@@ -66,9 +74,13 @@ export function InstanceList({ instances, selectedIndex, height }: Props) {
             borderColor={borderColor}
             paddingX={1}
           >
-            {/* Row 1: Status + Title (prominent) */}
+            {/* Row 1: Agent badge + Status + Title */}
             <Box>
-              <Text color={color} bold>{symbol} </Text>
+              {(() => {
+                const ag = AGENT_BADGES[inst.data.program] ?? AGENT_BADGES.custom;
+                return <Text color={ag.color} bold>[{ag.badge}]</Text>;
+              })()}
+              <Text color={color} bold> {symbol} </Text>
               <Text bold wrap="truncate">
                 {inst.data.title}
               </Text>
