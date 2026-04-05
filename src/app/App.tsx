@@ -363,6 +363,8 @@ export function App({ defaultDir }: AppProps) {
     await wezterm.activatePane(selected.data.paneId, sock);
   }, [instances, selectedIndex]);
 
+  const contentHeight = rows - 5;
+
   // Key input handling
   useInput((input, key) => {
     if (overlay !== 'none') {
@@ -370,7 +372,41 @@ export function App({ defaultDir }: AppProps) {
       return;
     }
 
-    // Navigation
+    // When diff tab is active, j/k scroll the diff instead of instance list
+    if (activeTab === 'diff') {
+      const diffLineCount = diffText.split('\n').length;
+
+      if (input === 'j' || key.downArrow) {
+        setScrollOffset(prev => Math.min(prev + 1, Math.max(0, diffLineCount - contentHeight)));
+        return;
+      }
+      if (input === 'k' || key.upArrow) {
+        setScrollOffset(prev => Math.max(0, prev - 1));
+        return;
+      }
+      // d = half page down, u = half page up
+      if (input === 'd') {
+        const half = Math.floor(contentHeight / 2);
+        setScrollOffset(prev => Math.min(prev + half, Math.max(0, diffLineCount - contentHeight)));
+        return;
+      }
+      if (input === 'u') {
+        const half = Math.floor(contentHeight / 2);
+        setScrollOffset(prev => Math.max(0, prev - half));
+        return;
+      }
+      // g = top, G = bottom
+      if (input === 'g') {
+        setScrollOffset(0);
+        return;
+      }
+      if (input === 'G') {
+        setScrollOffset(Math.max(0, diffLineCount - contentHeight));
+        return;
+      }
+    }
+
+    // Navigation (preview tab or no diff)
     if (key.upArrow || input === 'k') {
       setSelectedIndex(prev => Math.max(0, prev - 1));
       setScrollOffset(0);
@@ -388,14 +424,6 @@ export function App({ defaultDir }: AppProps) {
       setScrollOffset(0);
     }
 
-    // Scroll in diff view
-    if (key.shift && key.upArrow) {
-      setScrollOffset(prev => Math.max(0, prev - 1));
-    }
-    if (key.shift && key.downArrow) {
-      setScrollOffset(prev => prev + 1);
-    }
-
     // Actions
     if (input === 'n') setOverlay('new_instance');
     if (input === 'N') setOverlay('new_with_prompt');
@@ -409,17 +437,17 @@ export function App({ defaultDir }: AppProps) {
   });
 
   const selected = instances[selectedIndex] ?? null;
-  const contentHeight = rows - 3;
+  const layoutHeight = rows - 3;
 
   return (
     <Box flexDirection="column" width={cols} height={rows}>
-      <Box flexDirection="row" height={contentHeight}>
+      <Box flexDirection="row" height={layoutHeight}>
         {/* Left panel: instance list */}
         <Box width={Math.floor(cols * 0.3)} flexDirection="column" borderStyle="single" borderColor="gray">
           <InstanceList
             instances={instances}
             selectedIndex={selectedIndex}
-            height={contentHeight - 2}
+            height={layoutHeight - 2}
           />
         </Box>
 
@@ -429,7 +457,7 @@ export function App({ defaultDir }: AppProps) {
             activeTab={activeTab}
             previewText={previewText}
             diffText={diffText}
-            height={contentHeight - 2}
+            height={layoutHeight - 2}
             scrollOffset={scrollOffset}
             selected={selected}
           />
