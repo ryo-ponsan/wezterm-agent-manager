@@ -100,8 +100,14 @@ function sendNotification(status: string, agentTitle: string, repoName: string):
       $notify.Dispose();
     `;
     execFile('powershell.exe', ['-NoProfile', '-Command', script], () => {});
+  } else if (process.platform === 'darwin') {
+    // macOS: native notification via osascript
+    const escapedTitle = `wam - ${statusLabel}`.replace(/"/g, '\\"');
+    const escapedBody = body.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    const notifScript = `display notification "${escapedBody}" with title "${escapedTitle}" sound name "Glass"`;
+    execFile('osascript', ['-e', notifScript], () => {});
   } else {
-    // macOS / Linux: terminal bell
+    // Linux: terminal bell
     process.stdout.write('\x07');
   }
 }

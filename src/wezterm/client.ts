@@ -56,12 +56,22 @@ async function resolveWeztermBin(): Promise<string> {
     // Not on PATH – try common locations
   }
 
-  const candidates = [
-    "C:\\Program Files\\WezTerm\\wezterm.exe",
-    "C:\\Program Files (x86)\\WezTerm\\wezterm.exe",
-    `${process.env.LOCALAPPDATA ?? ""}\\Programs\\WezTerm\\wezterm.exe`,
-    `${process.env.USERPROFILE ?? ""}\\.cargo\\bin\\wezterm.exe`,
-  ];
+  const candidates: string[] = [];
+
+  if (process.platform === "win32") {
+    candidates.push(
+      "C:\\Program Files\\WezTerm\\wezterm.exe",
+      "C:\\Program Files (x86)\\WezTerm\\wezterm.exe",
+      `${process.env.LOCALAPPDATA ?? ""}\\Programs\\WezTerm\\wezterm.exe`,
+      `${process.env.USERPROFILE ?? ""}\\.cargo\\bin\\wezterm.exe`,
+    );
+  } else if (process.platform === "darwin") {
+    candidates.push(
+      "/Applications/WezTerm.app/Contents/MacOS/wezterm",
+      "/usr/local/bin/wezterm",
+      "/opt/homebrew/bin/wezterm",
+    );
+  }
 
   for (const candidate of candidates) {
     try {
@@ -221,7 +231,7 @@ export class WezTermClient {
   async activatePane(paneId: number, socket?: string): Promise<void> {
     await this.run(["activate-pane", "--pane-id", String(paneId)], socket);
 
-    // On Windows, also bring the WezTerm window to the foreground
+    // Also bring the WezTerm window to the foreground
     if (process.platform === "win32") {
       if (socket) {
         const pidMatch = socket.match(/gui-sock-(\d+)$/);
@@ -242,6 +252,13 @@ export class WezTermClient {
           }
         } catch { /* ignore */ }
       }
+    } else if (process.platform === "darwin") {
+      try {
+        await execFileAsync("osascript", [
+          "-e",
+          'tell application "WezTerm" to activate',
+        ]);
+      } catch { /* ignore */ }
     }
   }
 
